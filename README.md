@@ -9,6 +9,7 @@ Entrega da disciplina **Inteligência Artificial & Machine Learning** da Global 
 | Vitor de Lima Domingues | RM:561008 |
 | Giovanni Romano Provazi | RM:560434 |
 | Caio Berardo de Araújo | RM:560357 |
+| Felipe Carlos Abreu | RM:559476 |
 
 ## Ficha da CitizenTech
 
