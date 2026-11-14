@@ -15,7 +15,7 @@ Entrega da disciplina **Inteligência Artificial & Machine Learning** da Global 
 
 | Campo | Preenchimento |
 |---|---|
-| Nome da CitizenTech | *[preencher]* |
+| Nome da CitizenTech | *AprendIA* |
 | Cidade e bairro | O serviço funciona com exemplos do Brasil inteiro |
 | Cidadão beneficiado | Alunos do 1º ao 5º ano e seus professores |
 | Problema, em uma frase | Professores não têm um jeito rápido e padronizado de saber em quais conteúdos cada aluno está abaixo do esperado para a sua série, nem o que fazer a respeito. |
