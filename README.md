@@ -1,6 +1,8 @@
 # Diagnóstico de aprendizagem e lacunas por questionário — componente de IA
 
-Entrega da disciplina **Inteligência Artificial & Machine Learning** da Global Solution 2026.2 (CitizenTech). A solução é em Python; este repositório contém o modelo de Machine Learning que ela usa, **offline**.
+Entrega da disciplina **Inteligência Artificial & Machine Learning** da Global Solution 2026.2 (CitizenTech).
+
+Este repositório é a parte de IA do **AprendIA**: o modelo de Machine Learning, treinado em Python e exportado em ONNX, e o contrato de integração. Quem usa o modelo em produção é a **API REST em Java** do projeto, que executa o arquivo ONNX **dentro da própria API, offline e sem Python no servidor**.
 
 ## Integrantes
 | Nome | RM |
@@ -16,15 +18,54 @@ Entrega da disciplina **Inteligência Artificial & Machine Learning** da Global 
 | Campo | Preenchimento |
 |---|---|
 | Nome da CitizenTech | *AprendIA* |
-| Cidade e bairro | O serviço funciona com exemplos do Brasil inteiro |
+| Cidade e bairro | São Paulo |
 | Cidadão beneficiado | Alunos do 1º ao 5º ano e seus professores |
 | Problema, em uma frase | Professores não têm um jeito rápido e padronizado de saber em quais conteúdos cada aluno está abaixo do esperado para a sua série, nem o que fazer a respeito. |
 | Como funciona | O aluno responde a um questionário da sua série (24 questões de Língua Portuguesa e Matemática). O sistema corrige, um modelo de ML estima a chance de lacuna em cada um dos 8 conteúdos, e o sistema gera os insights: nível por disciplina, conteúdos a reforçar em ordem de urgência e uma estratégia de estudo para cada um. Casos inválidos ou duvidosos vão para o professor. |
-| O que cada parte faz | **IA (este repositório):** modelo treinado e exportado em ONNX, com o contrato de integração. **Aplicação Python:** aplica o questionário, roda o modelo sem internet e mostra os insights. |
-| Link do repositório | *[preencher]* |
+| O que cada parte faz | **IA (este repositório):** modelo treinado e exportado em ONNX, com o contrato de integração e os golden tests. **API Java:** cadastro de escolas e alunos, correção, execução do modelo, insights, confirmação do professor e histórico, com persistência no Oracle. |
+| Link do repositório | *https://github.com/Stack-Society/gs_IAeML_2026-27* (IA) · *https://github.com/Stack-Society/gs_SOAeWebServices_2026-27* (API Java) |
 | Indicador de impacto | % de alunos com diagnóstico no início do ano; tempo até a intervenção; % de lacunas superadas no questionário seguinte |
 | ODS conectados | ODS 4 (Educação de qualidade) e ODS 10 (Redução das desigualdades) |
 | Referências | BNCC; SAEB; Compromisso Nacional Criança Alfabetizada (MEC) |
+
+## A solução AprendIA
+
+O AprendIA é um único projeto dividido em partes. Esta entrega cobre a IA; a API Java usa o que ela gera.
+
+```
+                 ┌──────────── este repositório (Python) ────────────┐
+ base simulada ─►│ notebook: treino, avaliação, limiar e guardrails  │
+                 │   └─► models/modelo.onnx + models/modelo_info.json │
+                 │   └─► integracao/golden_tests.csv                  │
+                 └───────────────────────┬────────────────────────────┘
+                                         │ arquivos gerados
+                                         ▼
+ professor / app ──JSON──► API REST Java (Spring Boot) ──► ONNX Runtime (modelo.onnx)
+                                         │
+                                         └──► Oracle: escolas, alunos, questionário, diagnósticos e histórico
+```
+
+| Parte | Responsabilidade | Tecnologia |
+|---|---|---|
+| **IA** (este repositório) | gerar e avaliar o modelo, definir o limiar, a margem de dúvida, as regras de nível e o catálogo de estratégias; exportar o modelo e o contrato | Python, scikit-learn, ONNX |
+| **API REST** | receber as respostas, validar, corrigir, executar o modelo, montar os insights, gravar o diagnóstico e registrar a confirmação do professor | Java 25, Spring Boot, ONNX Runtime, Oracle |
+
+**O que a API Java usa desta entrega:**
+
+| Arquivo | Uso na API |
+|---|---|
+| `models/modelo.onnx` | carregado uma vez, quando a API sobe (`ModeloIaService`), e executado a cada diagnóstico |
+| `models/modelo_info.json` | origem dos gabaritos, conteúdos, ordem das features, limiar (0,40), margem (0,05), regra de nível e estratégias, que a API grava no banco nas migrações |
+| `integracao/golden_tests.csv` | conferência da API: as probabilidades em Java diferem no máximo 0,0000005 das do notebook, e situações e níveis batem em 100% dos casos válidos |
+
+O diagnóstico de um aluno passa a ser um recurso da API:
+
+```http
+POST /alunos/{id}/diagnosticos
+{ "respostas": { "q1": "A", ..., "q24": "B" } }
+```
+
+A resposta traz o nível de cada disciplina, a situação de cada conteúdo (com a probabilidade do modelo) e os conteúdos a reforçar com a estratégia de cada um. Os casos **a confirmar** são decididos pelo professor em `PATCH /alunos/{id}/diagnosticos/{diagnosticoId}/conteudos/{conteudo}`; a decisão do modelo continua gravada, para auditoria.
 
 ## Como funciona, passo a passo
 
