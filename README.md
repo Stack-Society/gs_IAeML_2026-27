@@ -146,9 +146,9 @@ Os parâmetros, os gabaritos e as estratégias de estudo são **ilustrativos**, 
 ```
 ├── diagnostico_lacunas_aprendizagem.ipynb  notebook com todo o trabalho, comentado linha a linha (entrega principal)
 ├── data/questionarios.csv                  base simulada (gerada pelo notebook)
-├── models/modelo.onnx                      modelo treinado, usado pela aplicação Python
+├── models/modelo.onnx                      modelo treinado, executado pela API Java (ONNX Runtime)
 ├── models/modelo_info.json                 contrato: gabaritos, features, limiar, margem, regras, estratégias, métricas
-├── integracao/golden_tests.csv             casos de teste com as saídas esperadas para a aplicação
+├── integracao/golden_tests.csv             casos de teste com as saídas esperadas, usados para conferir a API Java
 └── requirements.txt                        dependências com versões exatas
 ```
 
@@ -175,26 +175,24 @@ jupyter notebook diagnostico_lacunas_aprendizagem.ipynb   # depois: Kernel → R
 
 As células precisam rodar em ordem. A semente fixa garante os mesmos resultados e os mesmos arquivos em qualquer execução.
 
-## Integração com a aplicação Python
+## Integração com a API Java
 
-A aplicação que mostra o diagnóstico (por exemplo, uma API ou uma tela) **não roda o notebook**: ela usa só os arquivos gerados por ele.
+A API REST em Java **não roda o notebook nem precisa de Python**: ela usa só os arquivos gerados por ele.
 
-- **Dependências da aplicação:** `onnxruntime` e `numpy`. O scikit-learn e as demais bibliotecas de treino não são necessários.
-- **Carregar o modelo e o contrato:**
+- **Dependência na API:** ONNX Runtime para Java (`com.microsoft.onnxruntime:onnxruntime`). O scikit-learn e as demais bibliotecas de treino ficam só neste repositório.
+- **Onde cada parte fica na API:**
 
-  ```python
-  import json
-  import numpy as np
-  import onnxruntime as ort
+  | Etapa | Classe da API Java |
+  |---|---|
+  | carregar e executar o `modelo.onnx` | `ia/ModeloIaService` |
+  | validar e corrigir as respostas | `diagnostico/CorrecaoService` |
+  | situação de cada conteúdo e nível da disciplina | `diagnostico/Situacao`, `diagnostico/NivelDisciplina` |
+  | catálogo do questionário, gabaritos e estratégias | tabelas do Oracle, populadas a partir do contrato nas migrações |
 
-  contrato = json.load(open("models/modelo_info.json", encoding="utf-8"))
-  sessao = ort.InferenceSession("models/modelo.onnx")
-  # entrada: matriz float32 [1, 13] na ordem de contrato["entrada"]["ordem_features"]
-  probabilidades = sessao.run(None, {"acertos": entrada.astype(np.float32)})[1][0]
-  ```
+- **Versão do modelo:** cada diagnóstico gravado pela API guarda a `versao_modelo` do contrato (atualmente `2.0`), para saber qual modelo gerou cada resultado.
 
-- **Fluxo, nesta ordem** (todos os valores estão em `models/modelo_info.json`; a referência de cada etapa é a função de mesmo nome no notebook):
-  1. **Validar.** A série precisa ser de 1 a 5, e as 24 questões precisam ter resposta `A`, `B` ou `C`; caso contrário, o status é `invalido` e o modelo não é chamado.
+- **Fluxo, nesta ordem** (todos os valores estão em `models/modelo_info.json`; a referência de cada etapa é a função de mesmo nome no notebook, e a API reproduz as mesmas regras):
+  1. **Validar.** A série precisa ser de 1 a 5, e as 24 questões precisam ter resposta `A`, `B` ou `C`; caso contrário, o status é `invalido`, o modelo não é chamado e a API responde **400 Questionário inválido**, sem gravar nada.
   2. **Calcular as features** (`float32`, 13 valores, na ordem de `ordem_features`): os acertos (0 a 3) em cada conteúdo, usando o **gabarito da série**, e depois `serie_1` … `serie_5`, com 1 na série do aluno e 0 nas demais.
   3. **Rodar o modelo:** entrada `acertos` `[1, 13]`; usar a saída `probabilities` `[1, 8]`, na ordem de `ordem_saidas`. **Ignorar a saída `label`**, que usa o limiar padrão 0,5.
   4. **Decidir cada conteúdo:** `a_confirmar` se a distância entre a probabilidade e `limiar_lacuna` (0,40) for menor que `margem_duvida` (0,05); senão, `lacuna` se a probabilidade for maior ou igual a 0,40; senão, `sem_lacuna`.
@@ -202,24 +200,27 @@ A aplicação que mostra o diagnóstico (por exemplo, uma API ou uma tela) **nã
      - **nível por disciplina:** 0 lacunas → adequado; 1–2 → em desenvolvimento; 3–4 → abaixo do esperado. Se os conteúdos `a_confirmar` puderem mudar o nível, o nível fica "a confirmar";
      - **conteúdos a reforçar:** lacunas primeiro, depois os `a_confirmar`; em cada grupo, a maior probabilidade primeiro;
      - **textos:** `estrategias`, `orientacao_por_nivel` e `nome_exibicao`.
-- **Validação:** rode todos os casos de `integracao/golden_tests.csv` (por exemplo, num teste com `pytest`) e confira:
+  6. **Confirmação do professor (na API).** Os conteúdos `a_confirmar` são decididos pelo professor; a decisão do modelo continua gravada e o nível da disciplina é recalculado com a decisão final.
+- **Validação:** os casos de `integracao/golden_tests.csv` conferem a API contra o notebook:
   - o status;
   - a situação de cada conteúdo;
   - o nível de cada disciplina;
   - as probabilidades, que devem diferir menos de 0,0001.
+
+  **Resultado na API Java:** nos 40 casos válidos, as probabilidades diferem no máximo 0,0000005 das do notebook, e a situação dos 8 conteúdos e o nível das 2 disciplinas batem em 100% dos casos.
 
 ## Decisões principais
 
 | Decisão | Por quê | Alternativa descartada |
 |---|---|---|
 | **Multirrótulo por conteúdo** | um aluno pode ter nenhuma, uma ou várias lacunas, e a tarefa pede os conteúdos a reforçar | um nível único por disciplina: diria *quanto* o aluno sabe, mas não *o que* falta |
-| **Um classificador por conteúdo, com todas as features** (`OneVsRestClassifier`) | usa o desempenho nos outros conteúdos da mesma disciplina para decidir melhor do que olhando só as 3 questões | `MultiOutputClassifier`: mesmo resultado, mas o ONNX sai como lista de 8 matrizes, mais difícil de usar na aplicação |
+| **Um classificador por conteúdo, com todas as features** (`OneVsRestClassifier`) | usa o desempenho nos outros conteúdos da mesma disciplina para decidir melhor do que olhando só as 3 questões | `MultiOutputClassifier`: mesmo resultado, mas o ONNX sai como lista de 8 matrizes, mais difícil de usar na API Java |
 | **Separação treino/teste por escola** | o modelo será usado em escolas que nunca viu; misturar alunos da mesma escola geraria vazamento de dados | separação aleatória por aluno: daria um resultado otimista |
 | **Regressão logística** | empatou com o Random Forest na validação cruzada e é a mais simples e explicável | Random Forest e Gradient Boosting |
 | **Limiar escolhido pelo recall** (0,40) | o modelo precisa encontrar pelo menos tantas lacunas quanto a melhor regra simples | limiar padrão 0,5 (perderia lacunas) ou F2 (peso arbitrário) |
 | **Falhar fechado** | questionários inválidos não recebem diagnóstico, e conteúdos duvidosos ficam "a confirmar pelo professor" | decidir sempre: erros silenciosos perto do limiar |
 | **Estratégias de um catálogo fixo** | podem ser revisadas por pedagogos, são testáveis e funcionam offline, sem enviar dados de crianças a terceiros | texto gerado por LLM: pode inventar orientações e exige internet |
-| **ONNX** | a aplicação precisa só de `onnxruntime` e `numpy`, sem amarração com a versão do scikit-learn; formato aberto e mais seguro; também roda em C#, Java ou JavaScript, se outra parte da CitizenTech precisar | pickle/joblib: pode executar código ao carregar e só abre com a mesma versão do scikit-learn; `skops`: seguro, mas exige o scikit-learn na aplicação |
+| **ONNX** | o modelo treinado em Python roda dentro da API Java com o ONNX Runtime, sem Python no servidor e sem amarração com a versão do scikit-learn; formato aberto e mais seguro | pickle/joblib: pode executar código ao carregar e só abre em Python, com a mesma versão do scikit-learn; `skops`: seguro, mas exige Python e o scikit-learn no servidor da API |
 
 ## Conceitos principais
 
@@ -234,7 +235,8 @@ A aplicação que mostra o diagnóstico (por exemplo, uma API ou uma tela) **nã
 | Baseline | solução simples usada como régua mínima |
 | Limiar | probabilidade a partir da qual a resposta vira "lacuna" |
 | Guardrail | regra fixa que impede o sistema de agir sobre entradas inválidas ou previsões duvidosas |
-| Golden tests | casos com respostas esperadas, para conferir que a aplicação reproduz o notebook |
+| Golden tests | casos com respostas esperadas, para conferir que a API Java reproduz o notebook |
+| Contrato de integração | arquivo `modelo_info.json`, que define entrada, saída e regras para que o notebook (Python) e a API (Java) sejam desenvolvidos separadamente e deem o mesmo resultado |
 
 ## Limitações
 
